@@ -1,9 +1,11 @@
-use std::ops::Neg;
+use std::{sync::Arc, any::Any};
 
 use glam::*;
 use winit::window::Window;
 
-// use super::world::World;
+use super::{camera::Camera, utils::Dirtiable};
+
+// use super::utils::{IdMap, IsId};
 
 // #[derive(Clone, PartialEq, Eq, Debug)]
 // pub enum FrameSkipCause {
@@ -47,170 +49,13 @@ use winit::window::Window;
 //     }
 // }
 
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct ColoredVert {
-    pub pos: [f32; 3],
-    pub color: [f32; 3],
-}
-
-impl ColoredVert {
-    pub const ATTRIBUTES: &'static [wgpu::VertexAttribute] = &[
-        wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x3,
-            offset: 0,
-            shader_location: 0,
-        },
-        wgpu::VertexAttribute {
-            format: wgpu::VertexFormat::Float32x3,
-            offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
-            shader_location: 1,
-        },
-    ];
-    pub const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: Self::ATTRIBUTES,
-    };
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Projection {
-    Orthographic { w: f32, h: f32 },
-    Perspective { fov_y: f32, aspect_ratio: f32 },
-}
-
-pub struct Camera {
-    pub pos: Vec3,
-    pub rot: Quat,
-    pub near: f32,
-    pub far: f32,
-    pub proj: Projection,
-}
-
-impl Camera {
-    pub fn as_uniform_data(&self) -> [[f32; 4]; 4] {
-        self.transform_matrix().to_cols_array_2d()
-    }
-
-    /// Creates a camera using an orthographic projection
-    ///
-    /// # Panics
-    /// Panics if either of `scale.x` or `scale.y` is 0.
-    pub fn orthographic(pos: Vec3, rot: Quat, near: f32, scale: Vec3) -> Self {
-        assert_ne!(scale.x, 0.0);
-        assert_ne!(scale.y, 0.0);
-
-        Self {
-            pos,
-            rot: rot.normalize(),
-            near,
-            far: near + scale.z,
-            proj: Projection::Orthographic {
-                w: scale.x,
-                h: scale.y,
-            },
-        }
-    }
-
-    /// `fov_y` is in radians.
-    pub fn perspective(
-        pos: Vec3,
-        rot: Quat,
-        near: f32,
-        far: f32,
-        fov_y: f32,
-        aspect_ratio: f32,
-    ) -> Self {
-        Self {
-            pos,
-            rot: rot.normalize(),
-            near,
-            far,
-            proj: Projection::Perspective {
-                fov_y,
-                aspect_ratio,
-            },
-        }
-    }
-
-    /// Converts the camera space to the view space (camera looks at +z, +x is right and
-    /// +y is up)
-    pub fn view_matrix(&self) -> Mat4 {
-        let t = self.rot.mul_vec3(Vec3::Y);
-        let g = self.rot.mul_vec3(-Vec3::Z);
-        let gxt = g.cross(t);
-        Mat4::from_cols(
-            // gxt.extend(gxt.dot(self.pos)).into(),
-            // t.extend(t.dot(self.pos)).into(),
-            // g.extend(g.dot(self.pos)).into(),
-            gxt.extend(0.0),
-            t.extend(0.0),
-            g.extend(0.0),
-            [gxt.dot(self.pos), t.dot(self.pos), g.dot(self.pos), 1.0].into()
-        )
-        // TODO: this is a fixed multiplication, can figure this out based on g, t, and g x t
-        // Mat4::from_quat(self.rot) * Mat4::from_translation(self.pos)
-    }
-
-    /// Gets this camera's projection matrix, which converts view space coordinates
-    /// (camera looks at +z, +x is right, +y is up) to wgpu normalized device coordinates.
-    pub fn proj_matrix(&self) -> Mat4 {
-        let n = self.near;
-        let f = self.far;
-        match self.proj {
-            Projection::Orthographic { w, h } => {
-                Mat4::orthographic_lh(-w / 2.0, w / 2.0, -h / 2.0, h / 2.0, self.near, self.far)
-            }
-            // Mat4::from_cols(
-            //     2.0 / w * Vec4::X,
-            //     2.0 / h * Vec4::Y,
-            //     2.0 / (f - n) * Vec4::Z,
-            //     [0.0, 0.0, (n + f) / (n - f), 1.0].into(),
-            // ),
-            Projection::Perspective {
-                fov_y,
-                aspect_ratio,
-            } => {
-                // i tried to implement it myself and then realized glam already provides methods for various projections
-                Mat4::perspective_lh(fov_y, aspect_ratio, self.near, self.far)
-
-                // let t = f32::tan(fov_y / 2.0) * self.near.abs();
-                // let r = t * aspect_ratio;
-                // // this is the transpose of the perspective transform
-                // Mat4::from_cols_array_2d(&[
-                //     [n / r, 0.0, 0.0, 0.0],
-                //     [0.0, n / t, 0.0, 0.0],
-                //     [0.0, 0.0, (n + f) / (f - n), 1.0],
-                //     [0.0, 0.0, -2.0 * n * f / (n - f), 0.0],
-                // ])
-            }
-        }
-    }
-
-    pub fn transform_matrix(&self) -> Mat4 {
-        self.proj_matrix() * self.view_matrix()
-    }
-
-    /// Converts a world/camera space position to normalized device coordinates
-    pub fn transform(&self, pos: Vec3) -> Vec3 {
-        self.transform_matrix().project_point3(pos)
-    }
-
-    /// This is probably unnecessary micro-optimization
-    pub fn get_transform(&self) -> impl Fn(Vec3) -> Vec3 {
-        let transform_mat = self.transform_matrix();
-        move |vec| transform_mat.project_point3(vec)
-    }
-}
-
 pub struct WgpuBase {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
 
     pub(crate) surface: wgpu::Surface,
     /// Cached result of calling `surface.get_supported_formats()`
-    pub(crate) surface_supported_formats: Vec<wgpu::TextureFormat>,
+    pub(crate) _surface_supported_formats: Vec<wgpu::TextureFormat>,
     /// Holds the size according to the wgpu::Surface
     pub(crate) surface_config: wgpu::SurfaceConfiguration,
     pub(crate) resize_queued: bool,
@@ -228,7 +73,10 @@ impl WgpuBase {
         let size = window.inner_size();
 
         let instance = wgpu::Instance::new(wgpu::Backends::all());
-        // SAFETY: window gets moved into the returned value, and drop order guarantees it will be dropped after surface (and everything else)
+        // SAFETY: window gets moved into the returned value, and drop order guarantees it
+        // will be dropped after surface (and everything else)
+        // in the time between it getting moved into the return value and window being used
+        // here, it's the longest-lived temporary in this function and therefore will be dropped last
         let surface = unsafe { instance.create_surface(&window) };
         #[cfg(not(target_arch = "wasm32"))]
         let adapter = instance
@@ -271,7 +119,7 @@ impl WgpuBase {
             device,
             queue,
             surface,
-            surface_supported_formats,
+            _surface_supported_formats: surface_supported_formats,
             surface_config,
             resize_queued: false,
             size,
@@ -364,4 +212,203 @@ impl WgpuBase {
 
     //         Ok(())
     //     }
+}
+
+pub struct Texture {
+    pub handle: wgpu::Texture,
+    pub sampler: Option<wgpu::Sampler>,
+    pub view: wgpu::TextureView,
+}
+
+impl Texture {
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+    pub fn create_depth_texture(base: &WgpuBase, make_sampler: bool) -> Self {
+        let handle = base.device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: base.surface_config.width,
+                height: base.surface_config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+        });
+
+        let view = handle.create_view(&wgpu::TextureViewDescriptor {
+            ..Default::default() // label: None,
+                                 // format: ,
+                                 // dimension: ,
+                                 // aspect: wgpu::TextureAspect::DepthOnly,
+                                 // base_mip_level:,
+                                 // mip_level_count,
+                                 // base_array_layer,
+                                 // array_layer_count,
+        });
+
+        Texture {
+            handle,
+            sampler: None,
+            view,
+        }
+    }
+}
+
+pub trait Vertex {
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute];
+    const LAYOUT: wgpu::VertexBufferLayout<'static>;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ColoredVertex {
+    pub pos: [f32; 3],
+    pub color: [f32; 3],
+}
+
+impl Vertex for ColoredVertex {
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = &[
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+            shader_location: 1,
+        },
+    ];
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: Self::ATTRIBUTES,
+    };
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ModelVertex {
+    pub pos: [f32; 3],
+    pub tex_coords: [f32; 3],
+    pub normals: [f32; 3],
+}
+
+impl Vertex for ModelVertex {
+    const ATTRIBUTES: &'static [wgpu::VertexAttribute] = &[
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: 0,
+            shader_location: 0,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
+            shader_location: 1,
+        },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x3,
+            offset: std::mem::size_of::<[f32; 5]>() as wgpu::BufferAddress,
+            shader_location: 2,
+        },
+    ];
+    const LAYOUT: wgpu::VertexBufferLayout<'static> = wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<Self>() as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: Self::ATTRIBUTES,
+    };
+}
+
+// #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+// pub struct PipelineId(usize);
+// impl From<usize> for PipelineId {
+//     fn from(value: usize) -> Self {
+//         Self(value)
+//     }
+// }
+// impl From<PipelineId> for usize {
+//     fn from(id: PipelineId) -> Self {
+//         id.0
+//     }
+// }
+// impl IsId for PipelineId {}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Transform {
+    pub pos: Vec3,
+    pub rot: Quat,
+    pub scale: Vec3,
+}
+
+impl Transform {
+    pub fn translate_by(self, v: Vec3) -> Self {
+        Self {
+            pos: self.pos + v,
+            ..self
+        }
+    }
+    pub fn rotate_by(self, q: Quat) -> Self {
+        Self {
+            rot: (self.rot * q).normalize(),
+            ..self
+        }
+    }
+    pub fn scale_by(self, s: Vec3) -> Self {
+        Self {
+            scale: self.scale * s,
+            ..self
+        }
+    }
+
+    pub fn to_matrix(&self) -> Mat4 {
+        // let x_axis = self.rot.mul_vec3(Vec3::X * self.scale.x);
+        // let y_axis = self.rot.mul_vec3(Vec3::Y * self.scale.y);
+        // let z_axis = self.rot.mul_vec3(Vec3::Z * self.scale.z);
+        // Mat4::from_cols(x_axis, y_axis, z_axis, w_axis);
+        Mat4::from_scale_rotation_translation(self.scale, self.rot, self.pos)
+    }
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            pos: Vec3::ZERO,
+            rot: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        }
+    }
+}
+
+pub struct RenderObject {
+    pub vertex_buffer: Arc<wgpu::Buffer>,
+    pub num_vertices: usize,
+    pub index_buffer: Arc<wgpu::Buffer>,
+    pub num_indices: usize,
+    pub pipeline: Arc<wgpu::RenderPipeline>,
+    pub model_bind_group: wgpu::BindGroup,
+    pub model_uniform: wgpu::Buffer,
+    pub transform: Dirtiable<Transform>,
+    // low-effort but it works
+    pub render_hook: Option<Box<dyn FnMut(&Self, &mut wgpu::RenderPass, &wgpu::Queue)>>,
+}
+
+impl RenderObject {
+    pub fn update_uniforms(&self, camera: &Camera, always_update: bool, queue: &wgpu::Queue) {
+        let update_fn = |transform: &Transform| {
+            let mat = camera.transform_matrix() * transform.to_matrix();
+            queue.write_buffer(
+                &self.model_uniform,
+                0,
+                bytemuck::cast_slice(&mat.to_cols_array()),
+            );
+        };
+        if always_update {
+            update_fn(&self.transform);
+        } else {
+            self.transform.if_dirty(update_fn);
+        }
+    }
 }

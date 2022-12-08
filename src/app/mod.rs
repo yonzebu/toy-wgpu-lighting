@@ -1,4 +1,9 @@
-use std::time::Instant;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+
+use chrono::{DateTime, Utc};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -13,83 +18,85 @@ use winit::{
 
 mod render;
 use render::*;
-mod util;
-use util::*;
+mod utils;
+use utils::*;
+mod camera;
+use camera::*;
 
-const RECT_VERTICES: &[ColoredVert] = &[
-    ColoredVert {
+const _RECT_VERTICES: &[ColoredVertex] = &[
+    ColoredVertex {
         pos: [0.5, 0.5, 0.0],
         color: [0.0, 0.0, 1.0],
     },
-    ColoredVert {
+    ColoredVertex {
         pos: [0.5, -0.5, 0.0],
         color: [0.0, 1.0, 1.0],
     },
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, 0.5, 0.0],
         color: [1.0, 0.0, 1.0],
     },
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, -0.5, 0.0],
         color: [1.0, 1.0, 1.0],
     },
 ];
-const RECT_INDICES: &[u16] = &[2, 1, 0, 1, 2, 3];
+const _RECT_INDICES: &[u16] = &[2, 1, 0, 1, 2, 3];
 
-const TRIANGLE_VERTICES: &[ColoredVert] = &[
-    ColoredVert {
+const _TRIANGLE_VERTICES: &[ColoredVertex] = &[
+    ColoredVertex {
         pos: [0.5, 0.5, 0.0],
         color: [0.0, 0.0, 0.0],
     },
-    ColoredVert {
+    ColoredVertex {
         pos: [0.0, -0.5, 0.0],
         color: [0.0, 1.0, 0.0],
     },
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, 0.5, 0.0],
         color: [1.0, 0.0, 0.0],
     },
 ];
-const TRIANGLE_INDICES: &[u16] = &[2, 1, 0];
+const _TRIANGLE_INDICES: &[u16] = &[2, 1, 0];
 
-const CUBE_VERTICES: &[ColoredVert] = &[
+const CUBE_VERTICES: &[ColoredVertex] = &[
     // left bottom front
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, -0.5, -0.5],
         color: [0.0, 0.0, 0.0],
     },
     // left bottom back
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, -0.5, 0.5],
         color: [0.0, 0.0, 1.0],
     },
     // left top front
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, 0.5, -0.5],
         color: [0.0, 1.0, 0.0],
     },
     // left top back
-    ColoredVert {
+    ColoredVertex {
         pos: [-0.5, 0.5, 0.5],
         color: [0.0, 1.0, 1.0],
     },
     // right bottom front
-    ColoredVert {
+    ColoredVertex {
         pos: [0.5, -0.5, -0.5],
         color: [1.0, 0.0, 0.0],
     },
     // right bottom back
-    ColoredVert {
+    ColoredVertex {
         pos: [0.5, -0.5, 0.5],
         color: [1.0, 0.0, 1.0],
     },
     // right top front
-    ColoredVert {
+    ColoredVertex {
         pos: [0.5, 0.5, -0.5],
         color: [1.0, 1.0, 0.0],
     },
     // right top back
-    ColoredVert {
+    ColoredVertex {
         pos: [0.5, 0.5, 0.5],
         color: [1.0, 1.0, 1.0],
     },
@@ -97,99 +104,89 @@ const CUBE_VERTICES: &[ColoredVert] = &[
 const CUBE_INDICES: &[u16] = &[
     // front
     // ur front
-    2, 4, 6,
-    // dl front
-    4, 2, 0,
-    // back
+    2, 4, 6, // dl front
+    4, 2, 0, // back
     // ur back
-    1, 3, 7,
-    // dl back
-    7, 5, 1,
-
-    // right
+    1, 3, 7, // dl back
+    7, 5, 1, // right
     // ul right
-    7, 6, 4,
-    // dr right
-    4, 5, 7,
-    // left
+    7, 6, 4, // dr right
+    4, 5, 7, // left
     // ul left
-    1, 2, 3,
-    // dr left
-    2, 1, 0,
-
-    // top
+    1, 2, 3, // dr left
+    2, 1, 0, // top
     // ur top
-    3, 6, 7,
-    // dl top
-    6, 3, 2,
-    // bottom
+    3, 6, 7, // dl top
+    6, 3, 2, // bottom
     // ur bottom
-    5, 4, 0,
-    // dl bottom
+    5, 4, 0, // dl bottom
     0, 1, 5,
 ];
 
-const VERTICES: &[ColoredVert] = CUBE_VERTICES;
+const VERTICES: &[ColoredVertex] = CUBE_VERTICES;
 const INDICES: &[u16] = CUBE_INDICES;
 
+/// Only one output color target, uses a depth buffer
+// fn make_basic_colored_vertex_pipeline_desc<'a>(
+//     shader: &'a wgpu::ShaderModule,
+//     layout: Option<&'a wgpu::PipelineLayout>,
+//     color_targets: &'a [Option<wgpu::ColorTargetState>],
+// ) -> wgpu::RenderPipelineDescriptor<'a> {
+//     wgpu::RenderPipelineDescriptor {
+//         label: Some("Basic colored vertex render pipeline"),
+//         layout,
+//         vertex: wgpu::VertexState {
+//             module: &shader,
+//             entry_point: "vs_main",
+//             buffers: &[ColoredVertex::LAYOUT],
+//         },
+//         fragment: Some(wgpu::FragmentState {
+//             module: &shader,
+//             entry_point: "fs_main",
+//             targets: color_targets,
+//         }),
+//         primitive: wgpu::PrimitiveState {
+//             topology: wgpu::PrimitiveTopology::TriangleList,
+//             strip_index_format: None,
+//             front_face: wgpu::FrontFace::Ccw,
+//             cull_mode: Some(wgpu::Face::Back),
+//             polygon_mode: wgpu::PolygonMode::Fill,
+//             unclipped_depth: false,
+//             conservative: false,
+//         },
+//         depth_stencil: Some(wgpu::DepthStencilState {
+//             format: Texture::DEPTH_FORMAT,
+//             depth_write_enabled: true,
+//             depth_compare: wgpu::CompareFunction::LessEqual,
+//             stencil: wgpu::StencilState::default(),
+//             bias: wgpu::DepthBiasState::default(),
+//         }),
+//         multisample: wgpu::MultisampleState {
+//             count: 1,
+//             mask: !0,
+//             alpha_to_coverage_enabled: false,
+//         },
+//         multiview: None,
+//     }
+// }
+
 const MOVE_SPEED: f32 = 1.0;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Motion {
-    Pos,
-    Neg,
-    None,
-}
-
-impl Motion {
-    pub fn combine(self, rhs: Self) -> Self {
-        match self {
-            Motion::Neg => rhs.dec(),
-            Motion::None => rhs,
-            Motion::Pos => rhs.inc(),
-        }
-    }
-
-    pub fn inv(self) -> Self {
-        match self {
-            Motion::Pos => Motion::Neg,
-            Motion::None => Motion::None,
-            Motion::Neg => Motion::Pos,
-        }
-    }
-
-    pub fn inc(self) -> Self {
-        match self {
-            Self::Neg => Self::None,
-            _ => Self::Pos,
-        }
-    }
-    pub fn dec(self) -> Self {
-        match self {
-            Self::Pos => Self::None,
-            _ => Self::Neg,
-        }
-    }
-
-    pub fn as_multiplier(self) -> i32 {
-        match self {
-            Self::Neg => -1,
-            Self::None => 0,
-            Self::Pos => 1,
-        }
-    }
-}
+const COLORED_CUBE_ID: usize = 0;
+const TRIANGLE_ID: usize = 1;
+const RECT_ID: usize = 2;
 
 pub struct App {
     should_quit: bool,
-    last_update: Instant,
-    queued_move: [Motion; 3],
-    camera: Dirtiable<Camera>,
-    basic_pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    camera_uniform: wgpu::Buffer,
-    camera_bind_group: wgpu::BindGroup,
+    last_update: DateTime<Utc>,
+    camera: BasicCameraController,
+    // colored_vertex_pipeline: wgpu::RenderPipeline,
+    // model_pipeline: wgpu::RenderPipeline,
+    // vertex_buffer: wgpu::Buffer,
+    // index_buffer: wgpu::Buffer,
+    // camera_uniform: wgpu::Buffer,
+    // camera_bind_group: wgpu::BindGroup,
+    z_buffer: Texture,
+    objects: HashMap<usize, RenderObject>,
     base: WgpuBase,
 }
 
@@ -198,27 +195,27 @@ impl App {
         let base = WgpuBase::new(window).await;
 
         let aspect_ratio = base.size.width as f32 / base.size.height as f32;
-        let camera = Dirtiable::new(Camera::perspective(
+        let camera = Camera::perspective(
             -Vec3::Z,
             Quat::IDENTITY,
             0.0,
-            10.0,
-            80_f32.to_radians(),
+            1.0,
+            70_f32.to_radians(),
             aspect_ratio,
-        ));
-        // let basic_shader = base
-        //     .device
-        //     .create_shader_module(include_wgsl!("base_buffer.wgsl"));
-        // let basic_pipeline_layout =
-        //     base.device
-        //         .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        //             label: Some("Basic pipeline layout"),
-        //             bind_group_layouts: &[],
-        //             push_constant_ranges: &[],
-        //         });
-        let camera_shader = base
+        );
+        // let camera = Camera::orthographic(
+        //     -Vec3::Z,
+        //     Quat::IDENTITY,
+        //     0.0,
+        //     vec3(2.0*aspect_ratio, 2.0, 2.0)
+        // );
+        let camera = BasicCameraController::new(camera, MOVE_SPEED * Vec3::ONE, 1.0);
+        let colored_vertex_shader = base
             .device
-            .create_shader_module(include_wgsl!("base_camera.wgsl"));
+            .create_shader_module(include_wgsl!("colored_vertex.wgsl"));
+        let model_vertex_shader = base
+            .device
+            .create_shader_module(include_wgsl!("model_vertex.wgsl"));
         let camera_bind_group_layout =
             base.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -234,25 +231,39 @@ impl App {
                         count: None,
                     }],
                 });
-        let camera_pipeline_layout =
+        let model_mat_bind_group_layout =
+            base.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Model matrix bind group layout"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
+        let colored_vertex_pipeline_layout =
             base.device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Camera pipeline layout"),
-                    bind_group_layouts: &[&camera_bind_group_layout],
+                    label: Some("Colored vertex pipeline layout"),
+                    bind_group_layouts: &[&model_mat_bind_group_layout],
                     push_constant_ranges: &[],
                 });
-        let basic_pipeline = base
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Basic render pipeline"),
-                layout: Some(&camera_pipeline_layout),
+        let colored_vertex_pipeline = Arc::new(base.device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("Colored vertex render pipeline"),
+                layout: Some(&colored_vertex_pipeline_layout),
                 vertex: wgpu::VertexState {
-                    module: &camera_shader,
+                    module: &colored_vertex_shader,
                     entry_point: "vs_main",
-                    buffers: &[ColoredVert::LAYOUT],
+                    buffers: &[ColoredVertex::LAYOUT],
                 },
                 fragment: Some(wgpu::FragmentState {
-                    module: &camera_shader,
+                    module: &colored_vertex_shader,
                     entry_point: "fs_main",
                     targets: &[Some(wgpu::ColorTargetState {
                         format: base.surface_config.format,
@@ -264,95 +275,153 @@ impl App {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     strip_index_format: None,
                     front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Front),
+                    cull_mode: Some(wgpu::Face::Back),
                     polygon_mode: wgpu::PolygonMode::Fill,
                     unclipped_depth: false,
                     conservative: false,
                 },
-                depth_stencil: None,
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Texture::DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
                 multisample: wgpu::MultisampleState {
                     count: 1,
                     mask: !0,
                     alpha_to_coverage_enabled: false,
                 },
                 multiview: None,
-            });
+            },
+        ));
 
-        let vertex_buffer = base
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex buffer"),
-                contents: bytemuck::cast_slice(VERTICES),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-        let index_buffer = base
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Index buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: wgpu::BufferUsages::INDEX,
-            });
-
-        let camera_uniform = base
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Camera uniform buffer"),
-                contents: bytemuck::cast_slice(&camera.as_uniform_data()),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            });
-        let camera_bind_group = base.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Camera bind group"),
-            layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &camera_uniform,
-                    offset: 0,
-                    size: None,
+        let model_vertex_pipeline_layout =
+            base.device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("Model vertex pipeline layout"),
+                    bind_group_layouts: &[&model_mat_bind_group_layout],
+                    push_constant_ranges: &[],
+                });
+        let model_vertex_pipeline = Arc::new(base.device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("Model vertex render pipeline"),
+                layout: Some(&model_vertex_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &model_vertex_shader,
+                    entry_point: "vs_main",
+                    buffers: &[ModelVertex::LAYOUT],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &model_vertex_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: base.surface_config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
                 }),
-            }],
-        });
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Texture::DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+            },
+        ));
+
+        let colored_cube_model_uniform =
+            base.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("Camera uniform buffer"),
+                    // this is fine because initial transform is the identity transform
+                    contents: bytemuck::cast_slice(&camera.as_uniform_data()),
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                });
+        let colored_cube = RenderObject {
+            vertex_buffer: Arc::new(base.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Colored cube vertex buffer"),
+                    contents: bytemuck::cast_slice(CUBE_VERTICES),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            )),
+            num_vertices: CUBE_VERTICES.len(),
+            index_buffer: Arc::new(base.device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("Colored cube index buffer"),
+                    contents: bytemuck::cast_slice(CUBE_INDICES),
+                    usage: wgpu::BufferUsages::INDEX,
+                },
+            )),
+            num_indices: CUBE_INDICES.len(),
+            pipeline: colored_vertex_pipeline.clone(),
+            model_bind_group: base.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Camera bind group"),
+                layout: &model_mat_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: colored_cube_model_uniform.as_entire_binding(),
+                }],
+            }),
+            model_uniform: colored_cube_model_uniform,
+            transform: Transform::default().into(),
+            render_hook: None,
+        };
+
+        // let camera_uniform = base
+        //     .device
+        //     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //         label: Some("Camera uniform buffer"),
+        //         contents: bytemuck::cast_slice(&camera.as_uniform_data()),
+        //         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        //     });
+
+        let z_buffer = Texture::create_depth_texture(&base, false);
+
+        let objects = HashMap::from([(COLORED_CUBE_ID, colored_cube)]);
 
         Self {
             should_quit: false,
-            last_update: Instant::now(),
-            queued_move: [Motion::None; 3],
-            base,
+            last_update: Utc::now(),
             camera,
-            basic_pipeline,
-            vertex_buffer,
-            index_buffer,
-            camera_uniform,
-            camera_bind_group,
+            objects,
+            // colored_vertex_pipeline,
+            // vertex_buffer,
+            // index_buffer,
+            // camera_uniform,
+            // camera_bind_group,
+            z_buffer,
+            base,
         }
     }
 
     pub fn update(&mut self) {
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_update).as_secs_f32();
-        if self.queued_move[0] != Motion::None {
-            let sign = self.queued_move[0].as_multiplier() as f32;
-            self.camera
-                .modify(|camera| camera.pos.x += sign * MOVE_SPEED * dt);
-        }
-        if self.queued_move[1] != Motion::None {
-            let sign = self.queued_move[1].as_multiplier() as f32;
-            self.camera
-                .modify(|camera| camera.pos.z += sign * MOVE_SPEED * dt);
-        }
-        if self.camera.is_dirty() {
-            println!(
-                "camera moved, rectangle vertices are now:\n\
-                \tupper left: {:?}\n\
-                \tupper right: {:?}\n\
-                \tlower left: {:?}\n\
-                \tlower right: {:?}\n",
-                self.camera.transform(VERTICES[2].pos.into()),
-                self.camera.transform(VERTICES[0].pos.into()),
-                self.camera.transform(VERTICES[2].pos.into()),
-                self.camera.transform(VERTICES[1].pos.into())
-            );
-        }
+        let now = Utc::now();
+        let dt = now
+            .signed_duration_since(self.last_update)
+            .num_nanoseconds()
+            .unwrap() as f32
+            / 1_000_000_000.0;
+
+        self.camera.update_with_dt(dt);
+
         self.last_update = now;
     }
 
@@ -364,11 +433,13 @@ impl App {
 
     // Applies a queued resize if one exists.
     pub fn apply_resize(&mut self) {
-        self.base.apply_resize()
+        self.base.apply_resize();
+        self.z_buffer = Texture::create_depth_texture(&self.base, self.z_buffer.sampler.is_some());
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        self.base.resize(new_size)
+        self.queue_resize(new_size);
+        self.apply_resize();
     }
 
     pub fn render(&mut self) {
@@ -417,22 +488,49 @@ impl App {
                         store: true,
                     },
                 })],
-                depth_stencil_attachment: None,
+                // depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.z_buffer.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: true,
+                    }),
+                    stencil_ops: None,
+                }),
             });
 
-            render_pass.set_pipeline(&self.basic_pipeline);
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..));
-            render_pass.set_index_buffer(self.index_buffer.slice(0..), wgpu::IndexFormat::Uint16);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
+            for object in self.objects.values_mut() {
+                if let Some(mut render_hook) = object.render_hook.take() {
+                    // this is kinda just hacking around the borrow checker
+                    // not breaking any rules though! 
+                    // it's just maybe a tiny bit of a footgun to structure code like this
+                    render_hook(object, &mut render_pass, &self.base.queue);
+                    object.render_hook = Some(render_hook);
+                } else {
+                    render_pass.set_pipeline(&object.pipeline);
+                    render_pass.set_vertex_buffer(0, object.vertex_buffer.slice(0..));
+                    render_pass.set_index_buffer(
+                        object.index_buffer.slice(0..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    render_pass.set_bind_group(0, &object.model_bind_group, &[]);
+                    render_pass.draw_indexed(0..object.num_indices as u32, 0, 0..1);
+                }
+                if self
+                    .camera
+                    .if_dirty(|camera| object.update_uniforms(camera, true, &self.base.queue))
+                    .is_none()
+                {
+                    object.update_uniforms(&self.camera, false, &self.base.queue)
+                }
+            }
+
+            // render_pass.set_pipeline(&self.colored_vertex_pipeline);
+            // render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(0..));
+            // render_pass.set_index_buffer(self.index_buffer.slice(0..), wgpu::IndexFormat::Uint16);
+            // render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            // render_pass.draw_indexed(0..INDICES.len() as u32, 0, 0..1);
         }
-        self.camera.if_dirty(|camera| {
-            self.base.queue.write_buffer(
-                &self.camera_uniform,
-                0,
-                bytemuck::cast_slice(&camera.as_uniform_data()),
-            )
-        });
 
         self.base.queue.submit(std::iter::once(encoder.finish()));
         surface_texture.present();
@@ -444,6 +542,15 @@ impl App {
 
     pub fn process_event(&mut self, event: Event<()>, control_flow: &mut ControlFlow) {
         *control_flow = ControlFlow::Poll;
+        // process only the window events that apply to this window, but all other events pass through
+        if let &Event::WindowEvent { window_id, .. } = &event {
+            if window_id == self.base.window.id() {
+                self.camera.process_event(&event);
+            }
+        } else {
+            self.camera.process_event(&event);
+        }
+        // now do other event processing
         match event {
             Event::WindowEvent {
                 ref event,
@@ -469,70 +576,6 @@ impl App {
                     WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
                         self.queue_resize(**new_inner_size);
                     }
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                state,
-                                virtual_keycode: Some(keycode),
-                                ..
-                            },
-                        ..
-                    } => {
-                        if let Some((mut x_move, mut y_move)) = match keycode {
-                            VirtualKeyCode::W => Some((Motion::None, Motion::Pos)),
-                            VirtualKeyCode::S => Some((Motion::None, Motion::Neg)),
-                            VirtualKeyCode::A => Some((Motion::Neg, Motion::None)),
-                            VirtualKeyCode::D => Some((Motion::Pos, Motion::None)),
-                            _ => None,
-                        } {
-                            if *state == ElementState::Released {
-                                x_move = x_move.inv();
-                                y_move = y_move.inv();
-                            }
-                            self.queued_move[0] = self.queued_move[0].combine(x_move);
-                            self.queued_move[1] = self.queued_move[1].combine(y_move);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Event::DeviceEvent { event, .. } => {
-                match event {
-                    DeviceEvent::MouseMotion { delta } => {
-                        self.camera.modify(|camera| {
-                            let (x, y, _) = camera
-                                .rot
-                                // .mul_quat(Quat::from_axis_angle(
-                                //     Vec3::Y,
-                                //     delta.0.to_radians() as f32,
-                                // ))
-                                // .mul_quat(Quat::from_axis_angle(
-                                //     Vec3::X,
-                                //     delta.1.to_radians() as f32,
-                                // ))
-                                .normalize()
-                                .to_euler(EulerRot::XYZ);
-                            camera.rot = Quat::from_euler(
-                                EulerRot::XYZ,
-                                (x + delta.1.to_radians() as f32).clamp(f32::to_radians(-60.0), f32::to_radians(60.0)), 
-                                y + delta.0.to_radians() as f32, 
-                                0.0
-                            );
-                        });
-
-                        // println!("mouse moved, camera z is now: {:?}", self.camera.rot.mul_vec3(Vec3::Z));
-                        println!(
-                            "mouse moved, rectangle vertices are now:\n\
-                            \tupper left: {:?}\n\
-                            \tupper right: {:?}\n\
-                            \tlower left: NOT PRESENT\n\
-                            \tlower right: {:?}\n",
-                            self.camera.transform(VERTICES[2].pos.into()),
-                            self.camera.transform(VERTICES[0].pos.into()),
-                            // self.camera.transform(VERTICES[3].pos.into()),
-                            self.camera.transform(VERTICES[1].pos.into())
-                        );
-                    }
                     _ => {}
                 }
             }
@@ -551,9 +594,6 @@ impl App {
     }
 }
 
-
-
-
 fn init_logger() {
     cfg_if::cfg_if! {
         if #[cfg(target_arch = "wasm32")] {
@@ -565,12 +605,14 @@ fn init_logger() {
     }
 }
 
-
 pub async fn run() {
     init_logger();
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().with_title("toy wgpu renderer").build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_title("toy wgpu renderer")
+        .build(&event_loop)
+        .unwrap();
 
     #[cfg(target_arch = "wasm32")]
     {
