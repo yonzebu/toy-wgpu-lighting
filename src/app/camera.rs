@@ -133,9 +133,9 @@ impl Camera {
     }
 
     pub fn look_at(&self, pos: Vec3) -> Self {
-        let direction = Vec3::ZERO - Vec3::from(pos);
+        let direction = Vec3::from(pos) - self.pos;
         let [dx, dy, dz] = direction.to_array();
-        let pitch = -dy.atan2(vec2(dx, dz).length());
+        let pitch = (-dy).atan2(vec2(dx, dz).length());
         let yaw = (-dx).atan2(dz);
         let rot = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
         Self { rot, ..*self }

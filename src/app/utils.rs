@@ -59,14 +59,44 @@ impl<T> Dirtiable<T> {
         f(self.clean())
     }
 
-    /// Calls the provided closure only if dirty, marking clean when it's done.
+    /// Calls the provided closure only if dirty, marking clean when done.
     pub fn if_dirty<F, R>(&self, f: F) -> Option<R>
     where
         F: FnOnce(&T) -> R,
     {
         if self.is_dirty() {
+            // TODO: decide if
             let result = f(&self.value);
             self.dirty.set(false);
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    /// Calls the provided closure if either of the inputs is dirty, marking both clean when done.
+    pub fn if_either_dirty<U, F, R>(&self, other: &Dirtiable<U>, f: F) -> Option<R>
+    where
+        F: FnOnce(&T, &U) -> R,
+    {
+        if self.is_dirty() || other.is_dirty() {
+            let result = f(self.as_ref(), other.as_ref());
+            self.dirty.set(false);
+            other.dirty.set(false);
+            Some(result)
+        } else {
+            None
+        }
+    }
+
+    pub fn _if_both_dirty<U, F, R>(&self, other: &Dirtiable<U>, f: F) -> Option<R>
+    where
+        F: FnOnce(&T, &U) -> R,
+    {
+        if self.is_dirty() && other.is_dirty() {
+            let result = f(self.as_ref(), other.as_ref());
+            self.dirty.set(false);
+            other.dirty.set(false);
             Some(result)
         } else {
             None
@@ -102,7 +132,7 @@ impl<T> Dirtiable<T> {
         new_value
     }
 
-    pub fn mark_clean(&mut self) {
+    pub fn _mark_clean(&mut self) {
         self.dirty.set(false);
     }
     pub fn _mark_dirty(&mut self) {
@@ -136,7 +166,7 @@ impl<T: Default> Dirtiable<T> {
     #[must_use]
     pub fn _flush(&mut self) -> T {
         let old = self._replace(T::default());
-        self.mark_clean();
+        self._mark_clean();
         old
     }
 
@@ -213,6 +243,36 @@ impl<T> Deref for Dirtiable<T> {
     fn deref(&self) -> &Self::Target {
         &self.value
     }
+}
+
+impl<T> AsRef<T> for Dirtiable<T> {
+    fn as_ref(&self) -> &T {
+        &self
+    }
+}
+// impl<T> AsMut<T> for Dirtiable<T> {
+//     fn as_mut(&mut self) -> &mut T {
+//         self.get_mut()
+//     }
+// }
+
+pub const fn round_size_up_to_align(size: usize, align: usize) -> usize {
+    if size % align == 0 {
+        size
+    } else {
+        (size / align) * align + align
+    }
+}
+
+pub const fn round_size_of_up_to_align<T>(align: usize) -> usize {
+    round_size_up_to_align(std::mem::size_of::<T>(), align)
+}
+
+pub fn _round_size_of_val_up_to_align<T>(val: &T, align: usize) -> usize
+where
+    T: ?Sized,
+{
+    round_size_up_to_align(std::mem::size_of_val(val), align)
 }
 
 // pub trait IsId

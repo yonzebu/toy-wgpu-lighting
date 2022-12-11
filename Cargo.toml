@@ -24,6 +24,8 @@ anyhow = "1.0"
 tobj = { version = "3.2.1", features = [
     "async",
 ]}
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 image = "0.23"
 
 [build-dependencies]
@@ -43,3 +45,4 @@ web-sys = { version = "0.3", features = [
     "Location",
 ]}
 reqwest = { version = "0.11" }
+image = { version = "0.23", default-features = false, features = [ "gif", "jpeg", "ico", "png", "pnm", "tga", "tiff", "webp", "bmp", "hdr", "dxt", "dds", "farbfeld", ] }
