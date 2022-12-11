@@ -1,4 +1,4 @@
-use std::ops::{Add, AddAssign, Deref, Sub, SubAssign};
+use std::ops::{Add, AddAssign, Deref, DerefMut, Sub, SubAssign};
 
 use glam::*;
 use winit::event::{DeviceEvent, ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent};
@@ -7,7 +7,7 @@ use super::utils::Dirtiable;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Projection {
-    Orthographic { w: f32, h: f32 },
+    _Orthographic { w: f32, h: f32 },
     Perspective { fov_y: f32, aspect_ratio: f32 },
 }
 
@@ -22,7 +22,7 @@ pub struct Camera {
 
 impl Camera {
     pub fn as_uniform_data(&self) -> [[f32; 4]; 4] {
-        self.transform_matrix().to_cols_array_2d()
+        self.view_proj_matrix().to_cols_array_2d()
     }
 
     /// Creates a camera using an orthographic projection. May be broken right now, I need to
@@ -30,7 +30,7 @@ impl Camera {
     ///
     /// # Panics
     /// Panics if either of `scale.x` or `scale.y` is 0.
-    pub fn orthographic(pos: Vec3, rot: Quat, near: f32, scale: Vec3) -> Self {
+    pub fn _orthographic(pos: Vec3, rot: Quat, near: f32, scale: Vec3) -> Self {
         assert_ne!(scale.x, 0.0);
         assert_ne!(scale.y, 0.0);
 
@@ -39,7 +39,7 @@ impl Camera {
             rot: rot.normalize(),
             near,
             far: near + scale.z,
-            proj: Projection::Orthographic {
+            proj: Projection::_Orthographic {
                 w: scale.x,
                 h: scale.y,
             },
@@ -94,7 +94,7 @@ impl Camera {
         let n = self.near;
         let f = self.far;
         match self.proj {
-            Projection::Orthographic { w, h } => {
+            Projection::_Orthographic { w, h } => {
                 Mat4::orthographic_lh(-w / 2.0, w / 2.0, -h / 2.0, h / 2.0, n, f)
             }
             // Mat4::from_cols(
@@ -123,13 +123,22 @@ impl Camera {
         }
     }
 
-    pub fn transform_matrix(&self) -> Mat4 {
+    pub fn view_proj_matrix(&self) -> Mat4 {
         self.proj_matrix() * self.view_matrix()
     }
 
     /// Converts a world/camera space position to normalized device coordinates
-    pub fn transform_point(&self, pos: Vec3) -> Vec3 {
-        self.transform_matrix().project_point3(pos)
+    pub fn _transform_point(&self, pos: Vec3) -> Vec3 {
+        self.view_proj_matrix().project_point3(pos)
+    }
+
+    pub fn look_at(&self, pos: Vec3) -> Self {
+        let direction = Vec3::ZERO - Vec3::from(pos);
+        let [dx, dy, dz] = direction.to_array();
+        let pitch = -dy.atan2(vec2(dx, dz).length());
+        let yaw = (-dx).atan2(dz);
+        let rot = Quat::from_euler(EulerRot::YXZ, yaw, pitch, 0.0);
+        Self { rot, ..*self }
     }
 }
 
@@ -199,7 +208,7 @@ impl AddAssign for MotionDir {
 impl Sub for MotionDir {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self::Output {
-        self.combine(self.inv())
+        self.combine(rhs.inv())
     }
 }
 impl SubAssign for MotionDir {
@@ -337,9 +346,9 @@ impl BasicCameraController {
         });
     }
 
-    /// The semantics of this are a little weird since updates to camera state are never
+    /// The semantics of this are a little weird since updates to camera state aren't always
     /// immediately applied.
-    pub fn camera(&self) -> &Dirtiable<Camera> {
+    pub fn _camera(&self) -> &Dirtiable<Camera> {
         &self.camera
     }
 }
@@ -348,5 +357,11 @@ impl Deref for BasicCameraController {
     type Target = Dirtiable<Camera>;
     fn deref(&self) -> &Self::Target {
         &self.camera
+    }
+}
+
+impl DerefMut for BasicCameraController {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.camera
     }
 }

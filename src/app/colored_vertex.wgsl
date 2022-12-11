@@ -7,10 +7,20 @@
 // @group(0) @binding(0)
 // var<uniform> camera: CameraUniform;
 
+struct PointLight {
+    // diffuse_color is based on the texture sampling
+    pos: vec3<f32>,
+    diffuse_power: f32,
+    specular_color: vec3<f32>,
+    specular_power: f32,
+}
+@group(2) @binding(0)
+var<uniform> light: PointLight;
+
 struct ModelUniform {
     data: mat4x4<f32>,
 };
-@group(0) @binding(0)
+@group(3) @binding(0)
 var<uniform> model: ModelUniform;
 
 struct ColoredVertex {

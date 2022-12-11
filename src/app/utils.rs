@@ -1,8 +1,6 @@
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::hash::Hash;
-use std::iter::Map;
-use std::ops::{Deref, Index};
+use std::ops::Deref;
 
 #[derive(Debug)]
 pub struct Dirtiable<T> {
@@ -35,14 +33,14 @@ impl<T> Dirtiable<T> {
     // }
 
     /// Consumes this to produce the contained value
-    pub fn into_inner(self) -> T {
+    pub fn _into_inner(self) -> T {
         self.value
     }
 
     pub fn is_dirty(&self) -> bool {
         self.dirty.get()
     }
-    pub fn is_clean(&self) -> bool {
+    pub fn _is_clean(&self) -> bool {
         !self.is_dirty()
     }
 
@@ -54,7 +52,6 @@ impl<T> Dirtiable<T> {
         &self.value
     }
 
-    #[must_use]
     pub fn clean_with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
@@ -78,7 +75,7 @@ impl<T> Dirtiable<T> {
 
     /// This automatically marks this as dirty, even if you never write to the returned reference.
     #[must_use]
-    pub fn get_mut(&mut self) -> &mut T {
+    pub fn _get_mut(&mut self) -> &mut T {
         self.dirty.set(true);
         &mut self.value
     }
@@ -93,13 +90,13 @@ impl<T> Dirtiable<T> {
     }
 
     /// Overwrites the contained value and marks this as dirty.
-    pub fn write(&mut self, new_value: T) {
+    pub fn _write(&mut self, new_value: T) {
         self.dirty.set(true);
         self.value = new_value;
     }
 
     #[must_use]
-    pub fn replace(&mut self, mut new_value: T) -> T {
+    pub fn _replace(&mut self, mut new_value: T) -> T {
         std::mem::swap(&mut self.value, &mut new_value);
         self.dirty.set(true);
         new_value
@@ -108,7 +105,7 @@ impl<T> Dirtiable<T> {
     pub fn mark_clean(&mut self) {
         self.dirty.set(false);
     }
-    pub fn mark_dirty(&mut self) {
+    pub fn _mark_dirty(&mut self) {
         self.dirty.set(true);
     }
 }
@@ -116,13 +113,13 @@ impl<T> Dirtiable<T> {
 impl<T: Copy> Dirtiable<T> {
     /// Copies the contained value out.
     #[must_use]
-    pub fn get(&self) -> T {
+    pub fn _get(&self) -> T {
         **self
     }
 
     /// Copies the contained value out and marks as clean.
     #[must_use]
-    pub fn get_and_clean(&self) -> T {
+    pub fn _get_and_clean(&self) -> T {
         *self.clean()
     }
 }
@@ -130,26 +127,26 @@ impl<T: Copy> Dirtiable<T> {
 impl<T: Default> Dirtiable<T> {
     /// Takes the contained value, replacing with a default and marking this dirty
     #[must_use]
-    pub fn take(&mut self) -> T {
-        self.mark_dirty();
-        self.replace(T::default())
+    pub fn _take(&mut self) -> T {
+        self._mark_dirty();
+        self._replace(T::default())
     }
 
     /// Gets the contained value and replaces it with the default value, marking this clean when done.
     #[must_use]
-    pub fn flush(&mut self) -> T {
-        let old = self.replace(T::default());
+    pub fn _flush(&mut self) -> T {
+        let old = self._replace(T::default());
         self.mark_clean();
         old
     }
 
     /// Calls a closure on the contained value after replacing it with the default value
     /// and marking clean.
-    pub fn flush_with<F, R>(&mut self, f: F) -> R
+    pub fn _flush_with<F, R>(&mut self, f: F) -> R
     where
         F: FnOnce(T) -> R,
     {
-        f(self.flush())
+        f(self._flush())
     }
 }
 
